@@ -102,3 +102,59 @@ def install_global_hooks() -> Path:
 
     settings_path.write_text(json.dumps(data, indent=2), encoding="utf-8")
     return settings_path
+
+
+def _detect_project_tags(project_root: Path) -> list[str]:
+    """Sniff common build files to detect tech stack tags."""
+    tags: list[str] = []
+    markers = {
+        "package.json": "node",
+        "pyproject.toml": "python",
+        "requirements.txt": "python",
+        "Cargo.toml": "rust",
+        "go.mod": "go",
+        "build.gradle": "java",
+        "pom.xml": "java",
+    }
+    for fname, tag in markers.items():
+        if (project_root / fname).exists() and tag not in tags:
+            tags.append(tag)
+    return tags
+
+
+def _update_project_tags(memory_dir: Path, project_root: Path) -> None:
+    meta_path = memory_dir / ".meta.json"
+    data = json.loads(meta_path.read_text(encoding="utf-8"))
+    data["project_tags"] = _detect_project_tags(project_root)
+    meta_path.write_text(json.dumps(data, indent=2), encoding="utf-8")
+
+
+def main(argv: list[str] | None = None) -> int:
+    import argparse
+
+    parser = argparse.ArgumentParser(prog="bootstrap")
+    sub = parser.add_subparsers(dest="command", required=True)
+
+    init_p = sub.add_parser("init-project", help="Initialize .memory/ in a project")
+    init_p.add_argument("path", type=Path, help="Project root")
+
+    sub.add_parser("install-global", help="Install SessionStart + Stop hooks globally")
+
+    args = parser.parse_args(argv)
+
+    if args.command == "init-project":
+        memory = init_project(args.path)
+        _update_project_tags(memory, args.path)
+        print(f"[memory-init] initialized {memory}")
+        return 0
+
+    if args.command == "install-global":
+        settings = install_global_hooks()
+        print(f"[memory-init] global hooks installed at {settings}")
+        return 0
+
+    return 2
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())

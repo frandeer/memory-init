@@ -78,3 +78,19 @@ def test_install_global_hooks_preserves_existing(tmp_path, monkeypatch):
     assert "UserPromptSubmit" in data["hooks"]
     assert "SessionStart" in data["hooks"]
     assert "Stop" in data["hooks"]
+
+
+import subprocess
+import sys
+
+
+def test_bootstrap_cli_init_project(tmp_path):
+    """bootstrap.py init-project <path> creates .memory/."""
+    script = Path(__file__).parent.parent / "scripts" / "bootstrap.py"
+    result = subprocess.run(
+        [sys.executable, str(script), "init-project", str(tmp_path)],
+        capture_output=True,
+        text=True,
+    )
+    assert result.returncode == 0, result.stderr
+    assert (tmp_path / ".memory" / "MEMORY.md").exists()
