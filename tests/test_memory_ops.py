@@ -63,3 +63,62 @@ def test_append_buffer_turn_writes_unique_file(tmp_memory_dir):
     assert len(files) == 1
     content = files[0].read_text()
     assert "user asked about memory system" in content
+
+
+from memory_ops import write_entry, render_memory_index
+
+
+def test_write_entry_creates_file_and_updates_index(tmp_memory_dir):
+    """write_entry writes rules/*.md and updates MEMORY.md."""
+    entry = {
+        "id": "rule.naming.no-idx",
+        "type": "rule",
+        "summary": "변수명에 _idx 접미사 금지",
+        "scope": "local",
+        "updated": "2026-04-15",
+        "confidence": "high",
+        "tags": ["naming"],
+        "path": "rules/naming.md",
+        "rationale": "팀 표준",
+    }
+    body = "변수명에 `_idx` 쓰지 마라."
+    write_entry(tmp_memory_dir, entry, body)
+
+    rule_file = tmp_memory_dir / "rules" / "naming.md"
+    assert rule_file.exists()
+    content = rule_file.read_text(encoding="utf-8")
+    assert "변수명에 `_idx` 쓰지 마라." in content
+    assert "rule.naming.no-idx" in content
+
+    index = tmp_memory_dir / "MEMORY.md"
+    assert index.exists()
+    parsed = parse_memory_index(index)
+    assert len(parsed["rules"]) == 1
+    assert parsed["rules"][0]["id"] == "rule.naming.no-idx"
+
+
+def test_render_memory_index_deterministic():
+    """render_memory_index output is stable given same input."""
+    sections = {
+        "rules": [
+            {
+                "id": "rule.a",
+                "type": "rule",
+                "summary": "A",
+                "scope": "local",
+                "updated": "2026-04-15",
+                "confidence": "high",
+                "tags": ["x"],
+                "path": "rules/a.md",
+            }
+        ],
+        "lessons": [],
+        "patterns": [],
+    }
+    state_line = "- STATE.md last updated 2026-04-15 — demo"
+    tasks_line = "- TASKS.md: 0 pending"
+    output1 = render_memory_index(sections, state_line, tasks_line)
+    output2 = render_memory_index(sections, state_line, tasks_line)
+    assert output1 == output2
+    assert "rule.a" in output1
+    assert "## Rules" in output1

@@ -113,3 +113,91 @@ def append_buffer_turn(memory_dir: Path, episode: dict[str, Any]) -> Path:
 
     atomic_write(target, content)
     return target
+
+
+def render_memory_index(
+    sections: dict[str, list[dict[str, Any]]],
+    state_line: str = "",
+    tasks_line: str = "",
+    promotion_candidates: list[str] | None = None,
+) -> str:
+    """Render the MEMORY.md content from parsed sections.
+
+    Deterministic output: given the same input, always returns the same bytes.
+    """
+    lines: list[str] = []
+    lines.append("# Memory Index")
+    lines.append("")
+    lines.append("> 이 프로젝트의 장기 메모리 인덱스. `.memory/rules|lessons|patterns/` 하위에 상세 파일.")
+    lines.append("")
+    lines.append("## State")
+    if state_line:
+        lines.append(state_line)
+    if tasks_line:
+        lines.append(tasks_line)
+    lines.append("")
+
+    for section in SECTIONS:
+        lines.append(f"## {section.capitalize()}")
+        lines.append("")
+        entries = sections.get(section, [])
+        lines.append("```yaml")
+        if entries:
+            yaml_body = yaml.safe_dump(
+                entries,
+                allow_unicode=True,
+                sort_keys=False,
+                default_flow_style=False,
+            ).strip()
+            lines.append(yaml_body)
+        lines.append("```")
+        lines.append("")
+
+    lines.append("## Promotion Candidates")
+    if promotion_candidates:
+        for line in promotion_candidates:
+            lines.append(line)
+    lines.append("")
+
+    return "\n".join(lines)
+
+
+def _render_entry_file(entry: dict[str, Any], body: str) -> str:
+    """Render a single rule/lesson/pattern .md file (frontmatter + body)."""
+    fm_fields = {
+        k: v for k, v in entry.items() if k != "rationale" and v is not None
+    }
+    fm = yaml.safe_dump(fm_fields, allow_unicode=True, sort_keys=False).strip()
+    parts = [f"---\n{fm}\n---", "", f"# {entry.get('summary', entry.get('id', ''))}", "", body.strip()]
+    rationale = entry.get("rationale")
+    if rationale:
+        parts.extend(["", "## Rationale", "", rationale.strip()])
+    return "\n".join(parts) + "\n"
+
+
+def write_entry(memory_dir: Path, entry: dict[str, Any], body: str) -> None:
+    """Write an entry file (rules/lessons/patterns) and update MEMORY.md.
+
+    Idempotent: calling twice with the same id updates the existing entry.
+    """
+    memory_dir = Path(memory_dir)
+    entry_type = entry["type"]
+    section = f"{entry_type}s"  # rule -> rules, etc.
+
+    if "path" not in entry:
+        safe_name = entry["id"].split(".", 1)[-1]
+        entry["path"] = f"{section}/{safe_name}.md"
+
+    target_file = memory_dir / entry["path"]
+    content = _render_entry_file(entry, body)
+    atomic_write(target_file, content)
+
+    index_path = memory_dir / "MEMORY.md"
+    sections = parse_memory_index(index_path)
+    existing = [e for e in sections[section] if e.get("id") != entry["id"]]
+    index_entry = {k: v for k, v in entry.items() if k != "rationale"}
+    existing.append(index_entry)
+    sections[section] = existing
+
+    rendered = render_memory_index(sections)
+    atomic_write(index_path, rendered)
