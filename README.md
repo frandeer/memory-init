@@ -1,5 +1,7 @@
 # memory-init
 
+> Repository: https://github.com/frandeer/memory-init
+
 Claude Code용 **영구적이지만 최적화된 메모리 시스템**. 세션을 넘어 축적되고, 자동으로 압축·갱신·전파되는 경험 기반 기억 레이어.
 
 > 텍스트를 저장하지 말고 **판단 기준**을 저장하라.
@@ -153,9 +155,12 @@ SessionStart 훅
 
 `INSTALL.md` 참조. 요약:
 
-1. `~/.claude/skills/memory-init/` 폴더를 새 PC에 배치 (git clone 권장)
-2. `pip install pyyaml`
-3. `python ~/.claude/skills/memory-init/scripts/bootstrap.py install-global`
+```bash
+cd ~/.claude/skills
+git clone https://github.com/frandeer/memory-init.git
+pip install pyyaml
+python ~/.claude/skills/memory-init/scripts/bootstrap.py install-global
+```
 
 그게 전부. `settings.json`, `CLAUDE.md`는 bootstrap 스크립트가 target PC의 경로로 자동 갱신.
 

@@ -17,7 +17,7 @@
 **git으로 가져오는 경우 (권장):**
 ```bash
 cd ~/.claude/skills
-git clone <your-repo-url> memory-init
+git clone https://github.com/frandeer/memory-init.git
 ```
 
 **수동 복사:**
