@@ -64,6 +64,54 @@ SESSION_START_ABS = f"python {(SKILL_ROOT / 'scripts' / 'session_start.py').reso
 STOP_ABS = f"python {(SKILL_ROOT / 'scripts' / 'stop.py').resolve().as_posix()}"
 
 
+CLAUDE_MD_BEGIN = "<!-- memory-init: BEGIN -->"
+CLAUDE_MD_END = "<!-- memory-init: END -->"
+CLAUDE_MD_SNIPPET = f"""{CLAUDE_MD_BEGIN}
+## Memory system (memory-init)
+
+프로젝트 루트에 `.memory/` 디렉토리가 있으면 **그 위치의 메모리 시스템을 사용**합니다.
+Claude Code 기본 auto-memory(`~/.claude/projects/<slug>/memory/`)는 `.memory/`가 있는
+프로젝트에서는 **쓰지 마세요** — 두 시스템 동시 운영 시 충돌/중복이 발생합니다.
+
+- 부트스트랩: `/memory-init` 스킬
+- 런타임 훅: SessionStart / Stop / StopFailure는 `~/.claude/settings.json`에 설치됨
+- 스킬 루트: `~/.claude/skills/memory-init/`
+- 파일 레이아웃: `<project>/.memory/MEMORY.md`, `STATE.md`, `TASKS.md`, `rules/`, `lessons/`, `patterns/`, `_buffer/`
+
+**메모리 쓰기 규칙:**
+- `.memory/`가 있는 프로젝트: 항상 `.memory/`에 쓴다. 기본 auto-memory 경로에 쓰지 않는다.
+- `.memory/`가 없는 프로젝트: 기본 auto-memory 경로를 그대로 사용한다.
+{CLAUDE_MD_END}"""
+
+
+def install_claude_md_override(claude_md_path: Path | None = None) -> Path:
+    """Append the memory-init override section to ~/.claude/CLAUDE.md.
+
+    Idempotent: if the BEGIN/END markers already exist, replaces the block
+    with the current snippet (so updates to the snippet propagate on re-run).
+    If CLAUDE.md does not exist, creates it with just the snippet.
+    """
+    if claude_md_path is None:
+        claude_md_path = Path.home() / ".claude" / "CLAUDE.md"
+    claude_md_path.parent.mkdir(parents=True, exist_ok=True)
+
+    if claude_md_path.exists():
+        existing = claude_md_path.read_text(encoding="utf-8")
+    else:
+        existing = ""
+
+    if CLAUDE_MD_BEGIN in existing and CLAUDE_MD_END in existing:
+        start = existing.index(CLAUDE_MD_BEGIN)
+        end = existing.index(CLAUDE_MD_END) + len(CLAUDE_MD_END)
+        new_content = existing[:start] + CLAUDE_MD_SNIPPET + existing[end:]
+    else:
+        separator = "\n\n" if existing and not existing.endswith("\n") else ("\n" if existing and not existing.endswith("\n\n") else "")
+        new_content = existing + separator + CLAUDE_MD_SNIPPET + "\n"
+
+    claude_md_path.write_text(new_content, encoding="utf-8")
+    return claude_md_path
+
+
 def install_global_hooks() -> Path:
     """Register SessionStart + Stop + StopFailure hooks in ~/.claude/settings.json.
 
@@ -155,6 +203,8 @@ def main(argv: list[str] | None = None) -> int:
     if args.command == "install-global":
         settings = install_global_hooks()
         print(f"[memory-init] global hooks installed at {settings}")
+        claude_md = install_claude_md_override()
+        print(f"[memory-init] CLAUDE.md override written to {claude_md}")
         return 0
 
     return 2
