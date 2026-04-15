@@ -4,12 +4,83 @@ from __future__ import annotations
 import json
 import os
 import re
+import sys
 import tempfile
+import time as _time
+from contextlib import contextmanager
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
 import yaml
+
+if sys.platform == "win32":
+    import msvcrt
+
+    def _try_lock(fd) -> bool:
+        try:
+            msvcrt.locking(fd, msvcrt.LK_NBLCK, 1)
+            return True
+        except OSError:
+            return False
+
+    def _unlock(fd) -> None:
+        try:
+            msvcrt.locking(fd, msvcrt.LK_UNLCK, 1)
+        except OSError:
+            pass
+else:
+    import fcntl
+
+    def _try_lock(fd) -> bool:
+        try:
+            fcntl.flock(fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
+            return True
+        except (BlockingIOError, OSError):
+            return False
+
+    def _unlock(fd) -> None:
+        try:
+            fcntl.flock(fd, fcntl.LOCK_UN)
+        except OSError:
+            pass
+
+
+@contextmanager
+def acquire_lock(lock_path: Path, timeout: float = 5.0, poll_interval: float = 0.05):
+    """Cross-process exclusive file lock.
+
+    Blocks up to `timeout` seconds waiting for the lock. Raises TimeoutError
+    on failure. The lock file is created if missing and kept on disk after
+    release (for consistent state across runs).
+
+    Usage:
+        with acquire_lock(memory_dir / ".lock"):
+            # critical section — read/modify/write files safely
+            ...
+    """
+    lock_path = Path(lock_path)
+    lock_path.parent.mkdir(parents=True, exist_ok=True)
+    # Open in append+binary mode so the file is created if missing and we
+    # can still lock the first byte via platform-specific APIs.
+    fp = open(lock_path, "a+b")
+    try:
+        fp.seek(0)
+        deadline = _time.monotonic() + timeout
+        while not _try_lock(fp.fileno()):
+            if _time.monotonic() >= deadline:
+                raise TimeoutError(
+                    f"Could not acquire lock {lock_path} within {timeout}s"
+                )
+            _time.sleep(poll_interval)
+        try:
+            yield
+        finally:
+            fp.seek(0)
+            _unlock(fp.fileno())
+    finally:
+        fp.close()
+
 
 SECTIONS = ("rules", "lessons", "patterns")
 
@@ -178,10 +249,13 @@ def _render_entry_file(entry: dict[str, Any], body: str) -> str:
     return "\n".join(parts) + "\n"
 
 
-def write_entry(memory_dir: Path, entry: dict[str, Any], body: str) -> None:
-    """Write an entry file (rules/lessons/patterns) and update MEMORY.md.
+def _write_entry_locked(memory_dir: Path, entry: dict[str, Any], body: str) -> None:
+    """Internal helper: same as write_entry but does NOT acquire the lock.
 
-    Idempotent: calling twice with the same id updates the existing entry.
+    Caller must already hold ``acquire_lock(memory_dir / '.lock')``. This
+    exists so run_consolidation (which takes the lock for its whole pass)
+    can reuse the write logic without re-entering the lock from the same
+    process — fcntl/msvcrt locks are per-FD and re-entry behaves badly.
     """
     memory_dir = Path(memory_dir)
     entry_type = entry["type"]
@@ -204,3 +278,15 @@ def write_entry(memory_dir: Path, entry: dict[str, Any], body: str) -> None:
 
     rendered = render_memory_index(sections)
     atomic_write(index_path, rendered)
+
+
+def write_entry(memory_dir: Path, entry: dict[str, Any], body: str) -> None:
+    """Write an entry file (rules/lessons/patterns) and update MEMORY.md.
+
+    Idempotent: calling twice with the same id updates the existing entry.
+    Thread/process safe: uses an exclusive file lock to prevent concurrent
+    MEMORY.md corruption.
+    """
+    memory_dir = Path(memory_dir)
+    with acquire_lock(memory_dir / ".lock"):
+        _write_entry_locked(memory_dir, entry, body)

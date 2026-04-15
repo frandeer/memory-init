@@ -1,4 +1,9 @@
 """Tests for memory_ops.py."""
+import subprocess
+import sys as _sys
+import time as _t
+from pathlib import Path
+
 import pytest
 from memory_ops import parse_memory_index
 
@@ -122,3 +127,67 @@ def test_render_memory_index_deterministic():
     assert output1 == output2
     assert "rule.a" in output1
     assert "## Rules" in output1
+
+
+from memory_ops import acquire_lock
+
+
+def test_acquire_lock_creates_lockfile(tmp_path):
+    """acquire_lock creates the lock file on first use."""
+    lock_path = tmp_path / ".lock"
+    assert not lock_path.exists()
+    with acquire_lock(lock_path):
+        assert lock_path.exists()
+    # Still exists after release
+    assert lock_path.exists()
+
+
+def test_acquire_lock_sequential_works(tmp_path):
+    """Sequential acquires do not deadlock or leak state."""
+    lock_path = tmp_path / ".lock"
+    with acquire_lock(lock_path):
+        pass
+    # Second acquire should succeed cleanly
+    with acquire_lock(lock_path):
+        pass
+    # Third
+    with acquire_lock(lock_path):
+        pass
+
+
+def test_acquire_lock_timeout_when_held_by_subprocess(tmp_path):
+    """If another process holds the lock, acquire_lock raises TimeoutError."""
+    lock_path = tmp_path / ".lock"
+    scripts_dir = Path(__file__).parent.parent / "scripts"
+
+    holder_script = f'''
+import sys
+sys.path.insert(0, r"{scripts_dir}")
+from pathlib import Path
+import time
+from memory_ops import acquire_lock
+with acquire_lock(Path(r"{lock_path}")):
+    # Signal readiness by creating a flag file
+    Path(r"{tmp_path}/.ready").touch()
+    time.sleep(2.5)
+'''
+    proc = subprocess.Popen([_sys.executable, "-c", holder_script])
+    try:
+        # Wait for the child to signal it holds the lock
+        ready_flag = tmp_path / ".ready"
+        deadline = _t.monotonic() + 5.0
+        while not ready_flag.exists():
+            if _t.monotonic() > deadline:
+                raise RuntimeError("child never signaled readiness")
+            _t.sleep(0.05)
+
+        # Now the lock is held by the child. Main process should timeout.
+        start = _t.monotonic()
+        with pytest.raises(TimeoutError):
+            with acquire_lock(lock_path, timeout=0.4):
+                pass
+        elapsed = _t.monotonic() - start
+        assert 0.3 < elapsed < 1.5, f"Expected ~0.4s wait, got {elapsed:.2f}s"
+    finally:
+        proc.wait(timeout=10)
+    assert proc.returncode == 0
