@@ -50,3 +50,32 @@ def find_duplicates(
             if sim >= threshold:
                 pairs.append((entries[i]["id"], entries[j]["id"]))
     return pairs
+
+
+def detect_promotions(buffer_episodes: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    """Return pattern promotion candidates: themes seen in 2+ independent sessions.
+
+    Independent = different session_id. Same session repeats count as 1.
+    Returns one dict per promoted theme with evidence_count and sample summary.
+    """
+    by_theme: dict[str, dict[str, Any]] = {}
+    for ep in buffer_episodes:
+        theme = ep.get("theme")
+        if not theme:
+            continue
+        slot = by_theme.setdefault(theme, {"sessions": set(), "samples": []})
+        slot["sessions"].add(ep.get("session_id", "unknown"))
+        slot["samples"].append(ep.get("summary", ""))
+
+    promotions: list[dict[str, Any]] = []
+    for theme, data in by_theme.items():
+        session_count = len(data["sessions"])
+        if session_count >= 2:
+            promotions.append(
+                {
+                    "theme": theme,
+                    "evidence_count": session_count,
+                    "sample_summary": data["samples"][0],
+                }
+            )
+    return promotions
