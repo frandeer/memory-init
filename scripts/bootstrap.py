@@ -56,8 +56,12 @@ def init_project(project_root: Path) -> Path:
 HOOK_COMMAND_SESSION_START = "session_start.py"
 HOOK_COMMAND_STOP = "stop.py"
 
-SESSION_START_ABS = f"python {str((SKILL_ROOT / 'scripts' / 'session_start.py').resolve())}"
-STOP_ABS = f"python {str((SKILL_ROOT / 'scripts' / 'stop.py').resolve())}"
+# Use POSIX-style forward slashes in hook commands. On Windows, shells like
+# Git Bash treat backslashes as escape characters, so `C:\Users\HP\.claude`
+# gets mangled into `C:UsersHP.claude` before it reaches Python. Forward slashes
+# work on Windows Python interpreters and survive shell escaping untouched.
+SESSION_START_ABS = f"python {(SKILL_ROOT / 'scripts' / 'session_start.py').resolve().as_posix()}"
+STOP_ABS = f"python {(SKILL_ROOT / 'scripts' / 'stop.py').resolve().as_posix()}"
 
 
 def install_global_hooks() -> Path:
