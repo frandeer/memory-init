@@ -4,8 +4,20 @@ Pure logic. File access happens through memory_ops.
 """
 from __future__ import annotations
 
+import datetime
+import re
 from difflib import SequenceMatcher
+from pathlib import Path
 from typing import Any
+
+import yaml
+
+from memory_ops import (
+    atomic_write,
+    parse_memory_index,
+    render_memory_index,
+    write_entry,
+)
 
 
 def similarity(a: str, b: str) -> float:
@@ -79,3 +91,76 @@ def detect_promotions(buffer_episodes: list[dict[str, Any]]) -> list[dict[str, A
                 }
             )
     return promotions
+
+
+def _read_buffer_episodes(memory_dir: Path) -> list[dict[str, Any]]:
+    """Read all unprocessed turn files from _buffer/."""
+    buffer_dir = memory_dir / "_buffer"
+    if not buffer_dir.exists():
+        return []
+
+    sentinel = buffer_dir / ".consolidated"
+    cutoff = sentinel.stat().st_mtime if sentinel.exists() else 0.0
+
+    episodes: list[dict[str, Any]] = []
+    for path in sorted(buffer_dir.glob("session-*.md")):
+        if path.stat().st_mtime <= cutoff:
+            continue
+        text = path.read_text(encoding="utf-8")
+        m = re.match(r"^---\n(.*?)\n---\n\n?(.*)$", text, re.DOTALL)
+        if not m:
+            continue
+        try:
+            fm = yaml.safe_load(m.group(1)) or {}
+        except yaml.YAMLError:
+            continue
+        body = m.group(2).strip()
+        episode = dict(fm)
+        episode["summary"] = body or fm.get("summary", "")
+        episodes.append(episode)
+    return episodes
+
+
+def run_consolidation(memory_dir: Path) -> dict[str, int]:
+    """Execute full consolidation pass on a .memory/ directory.
+
+    Reads _buffer/, detects promotions/duplicates, writes updates, advances sentinel.
+    Returns counters for the caller to log.
+    """
+    memory_dir = Path(memory_dir)
+    buffer_dir = memory_dir / "_buffer"
+    buffer_dir.mkdir(exist_ok=True)
+
+    episodes = _read_buffer_episodes(memory_dir)
+    promoted = 0
+    merged = 0
+
+    if episodes:
+        promotions = detect_promotions(episodes)
+        today = datetime.date.today().isoformat()
+        for p in promotions:
+            theme = p["theme"]
+            entry = {
+                "id": f"pat.{theme}",
+                "type": "pattern",
+                "summary": p["sample_summary"][:80],
+                "scope": "local",
+                "updated": today,
+                "confidence": "medium",
+                "tags": [theme.split("-")[0] if "-" in theme else theme],
+                "path": f"patterns/{theme}.md",
+                "evidence_count": p["evidence_count"],
+            }
+            body = f"반복 관찰된 pattern. evidence_count={p['evidence_count']}"
+            write_entry(memory_dir, entry, body)
+            promoted += 1
+
+        current = parse_memory_index(memory_dir / "MEMORY.md")
+        for section_name, section_entries in current.items():
+            dupes = find_duplicates(section_entries, threshold=0.85)
+            merged += len(dupes)
+
+    sentinel = buffer_dir / ".consolidated"
+    sentinel.touch()
+
+    return {"promoted": promoted, "merged": merged, "episodes_seen": len(episodes)}

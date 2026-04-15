@@ -98,13 +98,16 @@ def append_buffer_turn(memory_dir: Path, episode: dict[str, Any]) -> Path:
     filename = f"session-{session_id}-turn-{turn:04d}.md"
     target = buffer_dir / filename
 
+    frontmatter_dict = {
+        "session_id": session_id,
+        "turn": turn,
+        "timestamp": episode.get("timestamp", ""),
+        "kind": episode.get("kind", "note"),
+    }
+    if episode.get("theme"):
+        frontmatter_dict["theme"] = episode["theme"]
     frontmatter = yaml.safe_dump(
-        {
-            "session_id": session_id,
-            "turn": turn,
-            "timestamp": episode.get("timestamp", ""),
-            "kind": episode.get("kind", "note"),
-        },
+        frontmatter_dict,
         allow_unicode=True,
         sort_keys=False,
     )

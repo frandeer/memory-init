@@ -64,3 +64,39 @@ def test_detect_promotions_theme_missing_skipped():
         {"session_id": "sess-2", "summary": "also noise"},
     ]
     assert detect_promotions(buffer_episodes) == []
+
+
+from pathlib import Path
+from memory_ops import append_buffer_turn, parse_memory_index
+from consolidate import run_consolidation
+
+
+def test_run_consolidation_empty_buffer_noop(tmp_memory_dir):
+    """If buffer is empty, no changes are made."""
+    result = run_consolidation(tmp_memory_dir)
+    assert result["promoted"] == 0
+    assert result["merged"] == 0
+
+
+def test_run_consolidation_with_promotion(tmp_memory_dir):
+    """Two independent-session buffer entries with same theme -> 1 new pattern."""
+    for session_id in ("sess-1", "sess-2"):
+        append_buffer_turn(
+            tmp_memory_dir,
+            {
+                "session_id": session_id,
+                "turn": 1,
+                "timestamp": "2026-04-15T14:30:00",
+                "summary": "retry on 5xx with jitter worked",
+                "kind": "lesson",
+                "theme": "http-retry-jitter",
+            },
+        )
+    result = run_consolidation(tmp_memory_dir)
+    assert result["promoted"] == 1
+
+    index = parse_memory_index(tmp_memory_dir / "MEMORY.md")
+    assert len(index["patterns"]) == 1
+    assert "retry" in index["patterns"][0]["summary"]
+
+    assert (tmp_memory_dir / "_buffer" / ".consolidated").exists()
