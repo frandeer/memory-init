@@ -51,3 +51,54 @@ def init_project(project_root: Path) -> Path:
         meta_path.write_text(json.dumps(meta, indent=2), encoding="utf-8")
 
     return memory
+
+
+HOOK_COMMAND_SESSION_START = "session_start.py"
+HOOK_COMMAND_STOP = "stop.py"
+
+SESSION_START_ABS = f"python {str((SKILL_ROOT / 'scripts' / 'session_start.py').resolve())}"
+STOP_ABS = f"python {str((SKILL_ROOT / 'scripts' / 'stop.py').resolve())}"
+
+
+def install_global_hooks() -> Path:
+    """Register SessionStart + Stop + StopFailure hooks in ~/.claude/settings.json.
+
+    Idempotent. Preserves unrelated existing keys.
+    Returns the settings.json path.
+    """
+    home = Path.home()
+    claude_dir = home / ".claude"
+    claude_dir.mkdir(exist_ok=True)
+    settings_path = claude_dir / "settings.json"
+
+    if settings_path.exists():
+        data = json.loads(settings_path.read_text(encoding="utf-8"))
+    else:
+        data = {}
+
+    hooks = data.setdefault("hooks", {})
+
+    def _ensure(event_name: str, command_abs: str, marker: str) -> None:
+        existing_list = hooks.setdefault(event_name, [])
+        for matcher_block in existing_list:
+            for h in matcher_block.get("hooks", []):
+                if marker in h.get("command", ""):
+                    return
+        existing_list.append(
+            {
+                "matcher": "",
+                "hooks": [
+                    {
+                        "type": "command",
+                        "command": command_abs,
+                    }
+                ],
+            }
+        )
+
+    _ensure("SessionStart", SESSION_START_ABS, HOOK_COMMAND_SESSION_START)
+    _ensure("Stop", STOP_ABS, HOOK_COMMAND_STOP)
+    _ensure("StopFailure", STOP_ABS, HOOK_COMMAND_STOP)
+
+    settings_path.write_text(json.dumps(data, indent=2), encoding="utf-8")
+    return settings_path
