@@ -95,13 +95,19 @@ def detect_promotions(buffer_episodes: list[dict[str, Any]]) -> list[dict[str, A
     return promotions
 
 
-def _read_buffer_episodes(memory_dir: Path) -> list[dict[str, Any]]:
-    """Read all unprocessed turn files from _buffer/."""
+def _read_buffer_episodes(
+    memory_dir: Path, sentinel_name: str = ".consolidated"
+) -> list[dict[str, Any]]:
+    """Read all unprocessed turn files from _buffer/.
+
+    sentinel_name lets callers (consolidate vs flush) advance independently —
+    both scan the same buffer but track their own progress marker.
+    """
     buffer_dir = memory_dir / "_buffer"
     if not buffer_dir.exists():
         return []
 
-    sentinel = buffer_dir / ".consolidated"
+    sentinel = buffer_dir / sentinel_name
     cutoff = sentinel.stat().st_mtime if sentinel.exists() else 0.0
 
     episodes: list[dict[str, Any]] = []

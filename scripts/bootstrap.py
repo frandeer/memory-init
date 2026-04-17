@@ -8,7 +8,16 @@ from pathlib import Path
 
 SKILL_ROOT = Path(__file__).parent.parent
 TEMPLATES_DIR = SKILL_ROOT / "templates"
-SECTIONS = ("rules", "lessons", "patterns", "_buffer", "_archive")
+SECTIONS = (
+    "rules",
+    "lessons",
+    "patterns",
+    "_buffer",
+    "_archive",
+    "daily",
+    "knowledge/concepts",
+    "knowledge/connections",
+)
 
 
 def init_project(project_root: Path) -> Path:
@@ -21,7 +30,7 @@ def init_project(project_root: Path) -> Path:
     memory.mkdir(parents=True, exist_ok=True)
 
     for sub in SECTIONS:
-        (memory / sub).mkdir(exist_ok=True)
+        (memory / sub).mkdir(parents=True, exist_ok=True)
 
     today = datetime.date.today().isoformat()
 
@@ -47,14 +56,27 @@ def init_project(project_root: Path) -> Path:
             "last_consolidated": None,
             "references": {},
             "project_tags": [],
+            "compile_hashes": {},
         }
         meta_path.write_text(json.dumps(meta, indent=2), encoding="utf-8")
+    else:
+        # Forward-compat: add compile_hashes to pre-existing .meta.json.
+        meta = json.loads(meta_path.read_text(encoding="utf-8"))
+        if "compile_hashes" not in meta:
+            meta["compile_hashes"] = {}
+            meta_path.write_text(json.dumps(meta, indent=2), encoding="utf-8")
+
+    knowledge_index = memory / "knowledge" / "index.md"
+    if not knowledge_index.exists():
+        tmpl = (TEMPLATES_DIR / "knowledge-index.md.tmpl").read_text(encoding="utf-8")
+        knowledge_index.write_text(tmpl, encoding="utf-8")
 
     return memory
 
 
 HOOK_COMMAND_SESSION_START = "session_start.py"
 HOOK_COMMAND_STOP = "stop.py"
+HOOK_COMMAND_PRE_COMPACT = "pre_compact.py"
 
 # Use POSIX-style forward slashes in hook commands. On Windows, shells like
 # Git Bash treat backslashes as escape characters, so `C:\Users\HP\.claude`
@@ -62,6 +84,7 @@ HOOK_COMMAND_STOP = "stop.py"
 # work on Windows Python interpreters and survive shell escaping untouched.
 SESSION_START_ABS = f"python {(SKILL_ROOT / 'scripts' / 'session_start.py').resolve().as_posix()}"
 STOP_ABS = f"python {(SKILL_ROOT / 'scripts' / 'stop.py').resolve().as_posix()}"
+PRE_COMPACT_ABS = f"python {(SKILL_ROOT / 'scripts' / 'pre_compact.py').resolve().as_posix()}"
 
 
 CLAUDE_MD_BEGIN = "<!-- memory-init: BEGIN -->"
@@ -76,7 +99,11 @@ Claude Code 기본 auto-memory(`~/.claude/projects/<slug>/memory/`)는 `.memory/
 - 부트스트랩: `/memory-init` 스킬
 - 런타임 훅: SessionStart / Stop / StopFailure는 `~/.claude/settings.json`에 설치됨
 - 스킬 루트: `~/.claude/skills/memory-init/`
-- 파일 레이아웃: `<project>/.memory/MEMORY.md`, `STATE.md`, `TASKS.md`, `rules/`, `lessons/`, `patterns/`, `_buffer/`
+- 파일 레이아웃: `<project>/.memory/MEMORY.md`, `STATE.md`, `TASKS.md`, `rules/`, `lessons/`, `patterns/`, `_buffer/`, `daily/`, `knowledge/`
+
+**두 개의 기억 레이어:**
+- **규범적 (rules/lessons/patterns)**: "앞으로 항상/절대 X" — `MEMORY.md`가 인덱스
+- **서술적 (knowledge/concepts·connections)**: "X가 뭔지, 어떻게 연결되는지" — `knowledge/index.md`가 인덱스. `ANTHROPIC_API_KEY` + `anthropic` 패키지가 있을 때만 활성화 (대화를 LLM으로 컴파일). 없으면 규범적 레이어만 동작.
 
 **메모리 쓰기 규칙:**
 - `.memory/`가 있는 프로젝트: 항상 `.memory/`에 쓴다. 기본 auto-memory 경로에 쓰지 않는다.
@@ -151,6 +178,7 @@ def install_global_hooks() -> Path:
     _ensure("SessionStart", SESSION_START_ABS, HOOK_COMMAND_SESSION_START)
     _ensure("Stop", STOP_ABS, HOOK_COMMAND_STOP)
     _ensure("StopFailure", STOP_ABS, HOOK_COMMAND_STOP)
+    _ensure("PreCompact", PRE_COMPACT_ABS, HOOK_COMMAND_PRE_COMPACT)
 
     settings_path.write_text(json.dumps(data, indent=2), encoding="utf-8")
     return settings_path

@@ -147,6 +147,27 @@ SessionStart 훅
 
 수동 저장은 rule + lesson만. pattern은 consolidation이 2+ 독립 세션에서 같은 테마를 보면 알아서 생성.
 
+## 지식 아티클 레이어 (optional)
+
+위 rule/lesson/pattern이 **"앞으로 항상/절대 X"** 라는 규범적 기억이라면, 이 레이어는 **"X가 뭔지, 어떻게 연결되는지"** 라는 서술적 지식. 대화 자체를 LLM으로 컴파일해 `knowledge/concepts/`, `knowledge/connections/` 아티클을 만든다 (Karpathy의 LLM Wiki 모델).
+
+```
+_buffer/ ──(flush.py, LLM)──▶ daily/YYYY-MM-DD.md ──(compile.py, SHA256 incremental)──▶ knowledge/concepts/*.md
+                                                                                     └─▶ knowledge/connections/*.md
+```
+
+**활성화 조건:** `pip install anthropic` + `ANTHROPIC_API_KEY` 환경변수. 둘 중 하나라도 없으면 규범적 레이어만 계속 동작하고 이 레이어는 no-op.
+
+**조회:**
+
+```bash
+python ~/.claude/skills/memory-init/scripts/query.py <project>/.memory "이 프로젝트에서 auth cookie는 어떻게 다루지?"
+```
+
+RAG 없이 `knowledge/index.md` + 모든 아티클을 그대로 LLM에 넘기는 full-context 방식 (<500 아티클 규모에선 벡터 DB보다 더 정확).
+
+**추가 안전장치:** `CLAUDE_INVOKED_BY=memory-compiler` 환경변수로 LLM 호출이 또 SessionStart 훅을 트리거하는 무한 재귀를 차단. PreCompact 훅이 auto-compaction 직전 턴 스냅샷을 `_buffer/`에 남겨 context 손실도 방지.
+
 ## 동시 세션
 
 같은 프로젝트에 Claude Code 창 여러 개를 동시에 열어도 안전합니다. `.memory/.lock`으로 `run_consolidation`과 `write_entry`가 직렬화되고, 타임아웃 5초 실패 시 `TimeoutError` 발생 (무한 대기 없음). 프로세스 크래시 시 OS가 락 자동 해제.
