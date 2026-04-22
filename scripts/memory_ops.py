@@ -1,12 +1,15 @@
 """File I/O utilities for the .memory/ system. Pure I/O, no business logic."""
 from __future__ import annotations
 
+import datetime
+import hashlib
 import json
 import os
 import re
 import sys
 import tempfile
 import time as _time
+import traceback
 from contextlib import contextmanager
 from dataclasses import dataclass
 from pathlib import Path
@@ -155,38 +158,179 @@ def atomic_write(target: Path, content: str) -> None:
         raise
 
 
-def append_buffer_turn(memory_dir: Path, episode: dict[str, Any]) -> Path:
-    """Write a single turn episode to _buffer/session-<id>-turn-<n>.md.
+def _sanitize_for_filename(raw: str, max_len: int = 8) -> str:
+    """Keep only filename-safe characters; truncate.
 
-    Atomic. Unique filename per turn. Returns the written file path.
+    Default max_len is 8 to keep session-id and event-hash segments short.
+    Pass a larger max_len for hook names — truncating them breaks the glob
+    patterns in consolidate._read_buffer_episodes (e.g. ``PreCompact`` would
+    become ``PreCompa`` and never match ``*-PreCompact-*.md``).
+    """
+    cleaned = re.sub(r"[^A-Za-z0-9_-]", "", raw or "")
+    return cleaned[:max_len] or "unknown"
+
+
+def append_buffer_turn(memory_dir: Path, episode: dict[str, Any]) -> Path:
+    """Write one turn episode to ``_buffer/<ts_ns>-<sid>-<hook>-<hash>.md``.
+
+    Thread/process safe: holds the per-memory-dir file lock while writing so
+    concurrent Stop/SubagentStop hooks never collide on the same target. The
+    filename is race-proof (timestamp + hash), so each Stop produces a unique
+    entry even under concurrent firing.
+
+    Idempotent: if ``episode["event_id"]`` matches an existing file, we skip
+    the write. Callers compute event_id from transcript state.
     """
     memory_dir = Path(memory_dir)
     buffer_dir = memory_dir / "_buffer"
     buffer_dir.mkdir(exist_ok=True)
 
-    session_id = episode.get("session_id", "unknown")
+    session_id = str(episode.get("session_id", "unknown"))
+    hook = str(episode.get("hook", "Stop"))
+    event_id = str(episode.get("event_id") or "")
     turn = episode.get("turn", 0)
-    filename = f"session-{session_id}-turn-{turn:04d}.md"
+
+    # Filename identity = ts_ns + sid + hook + event_hash. turn is metadata.
+    # Hook must NOT be truncated — consolidate._read_buffer_episodes matches
+    # globs like ``*-PreCompact-*.md`` and ``*-StopFailure-*.md`` literally.
+    ts_ns = _time.time_ns()
+    sid_short = _sanitize_for_filename(session_id)
+    hook_clean = _sanitize_for_filename(hook, max_len=32)
+    hash_short = _sanitize_for_filename(event_id) or _sanitize_for_filename(str(ts_ns))
+    filename = f"{ts_ns}-{sid_short}-{hook_clean}-{hash_short}.md"
     target = buffer_dir / filename
 
-    frontmatter_dict = {
-        "session_id": session_id,
-        "turn": turn,
-        "timestamp": episode.get("timestamp", ""),
-        "kind": episode.get("kind", "note"),
-    }
-    if episode.get("theme"):
-        frontmatter_dict["theme"] = episode["theme"]
-    frontmatter = yaml.safe_dump(
-        frontmatter_dict,
-        allow_unicode=True,
-        sort_keys=False,
-    )
-    body = episode.get("summary", "")
-    content = f"---\n{frontmatter}---\n\n{body}\n"
+    with acquire_lock(memory_dir / ".lock", timeout=30):
+        # Idempotency: same event_id already on disk? Bail out.
+        if event_id:
+            for existing in buffer_dir.glob(f"*-{hash_short}.md"):
+                if existing.name.endswith(f"-{hash_short}.md"):
+                    return existing
+        if target.exists():
+            return target
 
-    atomic_write(target, content)
+        frontmatter_dict: dict[str, Any] = {
+            "schema": "memory-turn/v2",
+            "session_id": session_id,
+            "turn": turn,
+            "timestamp": episode.get("timestamp", ""),
+            "kind": episode.get("kind", "turn"),
+            "hook": hook,
+        }
+        if event_id:
+            frontmatter_dict["event_id"] = event_id
+        if episode.get("parent_session_id"):
+            frontmatter_dict["parent_session_id"] = episode["parent_session_id"]
+        if episode.get("child_refs"):
+            frontmatter_dict["child_refs"] = episode["child_refs"]
+        if episode.get("theme"):
+            frontmatter_dict["theme"] = episode["theme"]
+
+        frontmatter = yaml.safe_dump(
+            frontmatter_dict,
+            allow_unicode=True,
+            sort_keys=False,
+        )
+        body = episode.get("summary", "")
+        content = f"---\n{frontmatter}---\n\n{body}\n"
+
+        atomic_write(target, content)
     return target
+
+
+def append_hook_error(
+    memory_dir: Path,
+    payload: dict[str, Any] | None,
+    exc: BaseException,
+    hook_name: str = "unknown",
+) -> Path | None:
+    """Append a dead-letter entry to ``_hook_errors.jsonl``.
+
+    Safe to call from exception handlers: best-effort, swallows its own errors
+    so a logging failure never breaks the calling hook.
+    """
+    try:
+        memory_dir = Path(memory_dir)
+        memory_dir.mkdir(parents=True, exist_ok=True)
+        log_path = memory_dir / "_hook_errors.jsonl"
+        safe_payload = {
+            k: payload.get(k) if isinstance(payload, dict) else None
+            for k in ("session_id", "cwd", "transcript_path", "hook_event_name")
+        }
+        entry = {
+            "timestamp": datetime.datetime.now().isoformat(timespec="seconds"),
+            "hook": hook_name,
+            "error_type": type(exc).__name__,
+            "error": str(exc)[:500],
+            "traceback_tail": "".join(traceback.format_exception(exc))[-1000:],
+            **safe_payload,
+        }
+        with log_path.open("a", encoding="utf-8") as f:
+            f.write(json.dumps(entry, ensure_ascii=False) + "\n")
+        return log_path
+    except Exception:
+        return None
+
+
+_FRONTMATTER_RE = re.compile(r"^---\n(.*?)\n---\n\n?(.*)$", re.DOTALL)
+
+
+def parse_buffer_file(path: Path) -> tuple[dict[str, Any], str] | None:
+    """Read a ``_buffer/*.md`` file and split it into frontmatter dict + body.
+
+    Returns ``None`` if the file can't be read, doesn't match the frontmatter
+    shape, or has invalid YAML. Used by both ``consolidate`` (buffer scanning)
+    and ``stop`` (child_refs lookup).
+    """
+    try:
+        text = path.read_text(encoding="utf-8", errors="ignore")
+    except OSError:
+        return None
+    m = _FRONTMATTER_RE.match(text)
+    if not m:
+        return None
+    try:
+        fm = yaml.safe_load(m.group(1)) or {}
+    except yaml.YAMLError:
+        return None
+    if not isinstance(fm, dict):
+        return None
+    return fm, m.group(2).strip()
+
+
+def mark_consumed(memory_dir: Path, paths: list[Path], parent_event_id: str) -> None:
+    """Rewrite each ``_buffer/*.md`` path with ``consumed: <parent_event_id>`` in
+    the frontmatter. Holds the memory-dir lock for the whole batch so child
+    files can't be simultaneously consumed by two parent Stops.
+
+    Safe to call with already-consumed paths (no-op on files that don't parse).
+    """
+    if not paths:
+        return
+    memory_dir = Path(memory_dir)
+    with acquire_lock(memory_dir / ".lock", timeout=30):
+        for path in paths:
+            parsed = parse_buffer_file(path)
+            if parsed is None:
+                continue
+            fm, body = parsed
+            if fm.get("consumed"):
+                continue
+            fm["consumed"] = parent_event_id
+            frontmatter = yaml.safe_dump(fm, allow_unicode=True, sort_keys=False)
+            atomic_write(path, f"---\n{frontmatter}---\n\n{body}\n")
+
+
+def compute_event_id(
+    session_id: str,
+    hook: str,
+    transcript_path: str | None,
+    transcript_size: int,
+    last_uuid: str | None,
+) -> str:
+    """Deterministic idempotency key for a hook firing."""
+    payload = f"{session_id}|{hook}|{transcript_path or ''}|{transcript_size}|{last_uuid or ''}"
+    return hashlib.sha256(payload.encode("utf-8")).hexdigest()[:8]
 
 
 def render_memory_index(

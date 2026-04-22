@@ -54,20 +54,46 @@ def test_atomic_write_overwrites_safely(tmp_path):
 
 
 def test_append_buffer_turn_writes_unique_file(tmp_memory_dir):
-    """append_buffer_turn creates a per-turn file in _buffer/."""
+    """append_buffer_turn creates a per-event file in _buffer/ (v2 filename scheme)."""
     episode = {
         "session_id": "sess-001",
         "turn": 1,
+        "hook": "Stop",
+        "event_id": "abc12345",
         "timestamp": "2026-04-15T14:30:00",
         "summary": "user asked about memory system",
-        "kind": "request",
+        "kind": "turn",
     }
     append_buffer_turn(tmp_memory_dir, episode)
     buffer_dir = tmp_memory_dir / "_buffer"
-    files = list(buffer_dir.glob("session-sess-001-turn-*.md"))
+    files = [p for p in buffer_dir.glob("*.md") if not p.name.startswith(".")]
     assert len(files) == 1
-    content = files[0].read_text()
+    name = files[0].name
+    assert "sess-001" in name or "sess001" in name
+    assert "Stop" in name
+    content = files[0].read_text(encoding="utf-8")
     assert "user asked about memory system" in content
+    assert "event_id: abc12345" in content
+
+
+def test_append_buffer_turn_idempotent(tmp_memory_dir):
+    """Same event_id => second call returns the same file, no duplicate."""
+    episode = {
+        "session_id": "sess-002",
+        "hook": "Stop",
+        "event_id": "deadbeef",
+        "timestamp": "2026-04-15T14:30:00",
+        "summary": "first write",
+        "kind": "turn",
+    }
+    path1 = append_buffer_turn(tmp_memory_dir, episode)
+    episode_dup = dict(episode, summary="second write attempt")
+    path2 = append_buffer_turn(tmp_memory_dir, episode_dup)
+    assert path1 == path2
+    files = [p for p in (tmp_memory_dir / "_buffer").glob("*.md") if not p.name.startswith(".")]
+    assert len(files) == 1
+    # Original content preserved (second write skipped)
+    assert "first write" in files[0].read_text(encoding="utf-8")
 
 
 from memory_ops import write_entry, render_memory_index

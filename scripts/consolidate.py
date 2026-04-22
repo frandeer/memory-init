@@ -15,10 +15,8 @@ import yaml
 from memory_ops import (
     _write_entry_locked,
     acquire_lock,
-    atomic_write,
+    parse_buffer_file,
     parse_memory_index,
-    render_memory_index,
-    write_entry,
 )
 
 
@@ -110,19 +108,28 @@ def _read_buffer_episodes(
     sentinel = buffer_dir / sentinel_name
     cutoff = sentinel.stat().st_mtime if sentinel.exists() else 0.0
 
+    # Accept both legacy ``session-<sid>-turn-NNNN.md`` and v2
+    # ``<ts_ns>-<sid>-<hook>-<hash>.md`` filenames. Hook name appears
+    # untruncated in v2 filenames, so the pattern must match each event kind.
+    buffer_globs = (
+        "session-*.md",
+        "*-Stop-*.md",
+        "*-StopFailure-*.md",
+        "*-SubagentStop-*.md",
+        "*-PreCompact-*.md",
+    )
+    candidates = {p for pattern in buffer_globs for p in buffer_dir.glob(pattern)}
+
     episodes: list[dict[str, Any]] = []
-    for path in sorted(buffer_dir.glob("session-*.md")):
+    for path in sorted(candidates):
+        if path.name.startswith("."):
+            continue
         if path.stat().st_mtime <= cutoff:
             continue
-        text = path.read_text(encoding="utf-8")
-        m = re.match(r"^---\n(.*?)\n---\n\n?(.*)$", text, re.DOTALL)
-        if not m:
+        parsed = parse_buffer_file(path)
+        if parsed is None:
             continue
-        try:
-            fm = yaml.safe_load(m.group(1)) or {}
-        except yaml.YAMLError:
-            continue
-        body = m.group(2).strip()
+        fm, body = parsed
         episode = dict(fm)
         episode["summary"] = body or fm.get("summary", "")
         episodes.append(episode)

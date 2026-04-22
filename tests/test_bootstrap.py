@@ -11,8 +11,11 @@ def test_init_project_creates_structure(tmp_path):
     init_project(tmp_path)
     memory = tmp_path / ".memory"
     assert memory.is_dir()
-    for sub in ("rules", "lessons", "patterns", "_buffer", "_archive"):
+    for sub in ("rules", "lessons", "patterns", "_buffer"):
         assert (memory / sub).is_dir(), f"missing {sub}"
+    # Obsolete layers should NOT be created by the minimal pipeline.
+    for legacy in ("daily", "_archive", "knowledge"):
+        assert not (memory / legacy).exists(), f"legacy {legacy} should not exist"
     for f in ("MEMORY.md", "STATE.md", "TASKS.md", ".meta.json"):
         assert (memory / f).exists(), f"missing {f}"
 

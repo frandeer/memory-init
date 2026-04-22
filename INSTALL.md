@@ -1,31 +1,25 @@
 # memory-init — 다른 PC로 이식하는 방법
 
-이 스킬을 새 PC / 새 사용자 계정에 설치하는 절차.
-
 ## 사전 요구사항
 
-- **Claude Code** 설치되어 있음
-- **Python 3.9 이상** (`python --version` 으로 확인)
+- **Claude Code** 설치됨
+- **Python 3.9 이상** (`python --version`)
 - **PyYAML**: `pip install pyyaml`
-- **anthropic (optional)**: `pip install anthropic`. 설치하지 않으면 지식 아티클 레이어(`daily/`, `knowledge/`)는 자동으로 비활성 — rule/lesson/pattern 시스템은 그대로 작동.
-- **ANTHROPIC_API_KEY (optional)**: 지식 아티클 레이어를 켜려면 환경변수에 API 키 필요. 없으면 LLM 의존 파이프라인(`flush.py`, `compile.py`, `query.py`)은 조용히 skip.
+
+LLM/Anthropic 의존성은 **필요 없습니다** (파이프라인이 전부 파일 기반으로 재작성됨).
 
 ## 설치 절차
 
 ### 1. 스킬 디렉토리 배치
 
-이 폴더(`memory-init/` 전체)를 target PC의 `~/.claude/skills/memory-init/` 아래에 둡니다.
-
-**git으로 가져오는 경우 (권장):**
 ```bash
 cd ~/.claude/skills
 git clone https://github.com/frandeer/memory-init.git
 ```
 
-**수동 복사:**
-폴더 전체를 USB/Dropbox/scp로 옮겨 `~/.claude/skills/memory-init/`에 배치.
+수동 복사도 가능: 폴더를 `~/.claude/skills/memory-init/`에 배치.
 
-### 2. Python 의존성 설치
+### 2. Python 의존성
 
 ```bash
 pip install pyyaml
@@ -37,11 +31,11 @@ pip install pyyaml
 python ~/.claude/skills/memory-init/scripts/bootstrap.py install-global
 ```
 
-이 명령이 자동으로 수행:
-- `~/.claude/settings.json`에 `SessionStart`, `Stop`, `StopFailure`, `PreCompact` 훅 4개 등록
-- `~/.claude/CLAUDE.md` 맨 아래에 `<!-- memory-init: BEGIN/END -->` 마커로 감싼 override 섹션 추가 (Claude가 `.memory/`를 쓰도록 안내)
+수행 내용:
+- `~/.claude/settings.json`에 5개 훅 등록: `SessionStart`, `Stop`, `StopFailure`, `SubagentStop`, `PreCompact`
+- `~/.claude/CLAUDE.md`에 `<!-- memory-init: BEGIN/END -->` override 블록 추가
 
-**idempotent**: 여러 번 실행해도 안전. 이미 설치된 엔트리는 중복 추가 안 함.
+재실행 idempotent — 중복 등록 없음, 기존 블록은 최신 스니펫으로 교체.
 
 ### 4. 설치 검증 (선택)
 
@@ -50,112 +44,80 @@ cd ~/.claude/skills/memory-init
 python -m pytest tests/ -v
 ```
 
-36 passed가 나와야 정상.
+**26 passed**가 나와야 정상.
 
 ### 5. 프로젝트 초기화
-
-메모리 시스템을 쓰고 싶은 각 프로젝트마다:
 
 ```bash
 cd /path/to/project
 python ~/.claude/skills/memory-init/scripts/bootstrap.py init-project .
 ```
 
-`<project>/.memory/` 디렉토리 구조가 생성됨:
+생성되는 구조:
 ```
 .memory/
-├── MEMORY.md
-├── STATE.md
-├── TASKS.md
-├── .meta.json
-├── rules/
-├── lessons/
-├── patterns/
-├── _buffer/
-├── _archive/
-├── daily/             # LLM이 추출한 일일 하이라이트 (ANTHROPIC_API_KEY 있을 때만)
-└── knowledge/
-    ├── index.md
-    ├── concepts/
-    └── connections/
+├── MEMORY.md        # 규칙/교훈/패턴 인덱스
+├── STATE.md         # 현재 작업 상태
+├── TASKS.md         # 진행 중 작업
+├── .meta.json       # 프로젝트 메타데이터
+├── rules/           # 항상 지킬 규칙
+├── lessons/         # 시행착오 교훈
+├── patterns/        # 2+ 세션에서 반복 관찰된 패턴 (자동 승격)
+├── _buffer/         # 턴별 에피소드 (미처리)
+└── _hook_errors.jsonl  # 훅 실패 dead-letter (최초엔 없음)
 ```
+
+구버전 설치(`daily/`, `_archive/`, `knowledge/` 존재)는 `init-project` 실행 시 자동으로 `_migrated-YYYYMMDD/`로 이동 — 데이터 손실 없음.
 
 ### 6. Claude Code 세션 시작
 
-그 프로젝트 디렉토리에서 Claude Code를 시작하면 자동으로:
-- SessionStart 훅이 `MEMORY.md` 인덱스를 system prompt에 주입
-- Stop 훅이 매 턴마다 `_buffer/`에 에피소드 기록
-- 다음 SessionStart가 catch-up consolidation 실행
+그 프로젝트 디렉토리에서 Claude Code를 실행하면 자동으로:
+- **SessionStart** 훅이 `MEMORY.md` 인덱스 + 최근 훅 에러 요약을 컨텍스트에 주입
+- **Stop / StopFailure / SubagentStop** 훅이 턴을 `_buffer/<ts_ns>-<sid>-<hook>-<hash>.md`로 기록
+- **PreCompact** 훅이 auto-compaction 직전 스냅샷
+- 모든 훅은 `safe_main()`으로 감싸져 있어 예외는 `_hook_errors.jsonl`에 기록되고 Claude 작업은 중단되지 않음
 
-## 이식 시 주의사항
+## 이식 시 주의
 
-### 가져가지 말아야 할 것
-
-- `~/.claude/settings.json`: PC마다 다른 설정(OMC, 다른 스킬 훅). `install-global`이 안전하게 섹션 추가.
-- `~/.claude/CLAUDE.md`: 위와 동일. `install-global`이 마커 블록만 추가.
-- 다른 프로젝트의 `.memory/` 데이터: 프로젝트별 고유 데이터. 같은 프로젝트를 두 PC에서 공유하고 싶다면 프로젝트 디렉토리 전체를 동기화 (git / GDrive / Syncthing 등).
-
-### 가져가야 하지만 자동 처리되는 것
-
-- 훅 경로의 절대경로: `bootstrap.py`의 `install-global`이 target PC의 `$HOME`을 기반으로 자동 해석. 이전 PC의 경로를 가져오지 않음.
+- `~/.claude/settings.json`과 `~/.claude/CLAUDE.md`는 PC마다 다르므로 **가져가지 마세요**. `install-global`이 target PC의 `$HOME`을 기반으로 안전하게 블록만 추가.
+- 프로젝트별 `.memory/` 데이터는 프로젝트 디렉토리와 함께 동기화 (git/GDrive/Syncthing 등).
 
 ### Windows vs Unix
 
-- **하드코딩된 backslash는 없음**. 훅 커맨드는 `Path.as_posix()`로 forward slash 사용. Windows Python + Git Bash 호환.
-- **파일 락**은 `sys.platform` 분기로 자동 선택:
-  - Windows → `msvcrt.locking`
-  - Linux/macOS → `fcntl.flock`
-
-### Python 의존성 주의
-
-- **PyYAML이 반드시 필요**. 없으면 `parse_memory_index`, `render_memory_index` 등이 전부 실패.
-- `pytest`는 테스트 실행 시에만 필요 (production 실행엔 불필요).
+- 훅 커맨드는 `Path.as_posix()`로 forward slash 사용 — Windows Python + Git Bash 호환
+- 파일 락은 플랫폼 자동 분기 (msvcrt / fcntl)
 
 ## 업데이트
 
-스킬이 진화하면 target PC에서:
-
 ```bash
 cd ~/.claude/skills/memory-init
-git pull       # git으로 설치한 경우
-python -m pytest tests/ -v      # 회귀 확인
-python scripts/bootstrap.py install-global    # 혹시 훅/CLAUDE.md 포맷이 바뀌었다면 재설치
+git pull
+python -m pytest tests/ -v
+python scripts/bootstrap.py install-global    # 훅/스니펫 최신화
 ```
 
-`install-global`을 재실행해도 기존 마커 블록만 교체되므로 안전.
+## 제거
 
-## 제거 방법
-
-완전히 지우고 싶다면:
-
-1. `~/.claude/CLAUDE.md`에서 `<!-- memory-init: BEGIN -->` ~ `<!-- memory-init: END -->` 블록 삭제
-2. `~/.claude/settings.json`에서 `SessionStart`, `Stop`, `StopFailure` 항목 중 `session_start.py`/`stop.py`를 참조하는 엔트리 삭제
-3. `~/.claude/skills/memory-init/` 디렉토리 삭제
-4. 각 프로젝트의 `.memory/` 디렉토리 삭제 (데이터도 지울 거면)
+1. `~/.claude/CLAUDE.md`에서 `<!-- memory-init: BEGIN -->` ~ `END` 블록 삭제
+2. `~/.claude/settings.json`에서 `SessionStart`/`Stop`/`StopFailure`/`SubagentStop`/`PreCompact` 중 `session_start.py` 또는 `stop.py`/`pre_compact.py`를 참조하는 항목 삭제
+3. `~/.claude/skills/memory-init/` 삭제
+4. 각 프로젝트의 `.memory/` 삭제 (데이터도 지울 때만)
 
 ## 현재 포함된 모듈
 
-- `SKILL.md` — 스킬 정의 및 description (Claude Code가 자동 인식)
-- `scripts/memory_ops.py` — 파일 I/O 유틸 + 크로스 플랫폼 파일 락
-- `scripts/consolidate.py` — consolidation 파이프라인 (similarity, promotion, 파일 락)
-- `scripts/bootstrap.py` — install-global + init-project CLI
-- `scripts/session_start.py` — SessionStart 훅 어댑터 (consolidation + flush + compile 호출)
-- `scripts/stop.py` — Stop / StopFailure 훅 어댑터
-- `scripts/pre_compact.py` — PreCompact 훅 (auto-compaction 직전 스냅샷)
-- `scripts/llm.py` — Anthropic SDK 래퍼 + 재귀 가드
-- `scripts/flush.py` — buffer → daily 추출 (LLM)
-- `scripts/compile.py` — daily → knowledge 컴파일 (LLM + SHA-256 incremental)
-- `scripts/query.py` — `.memory/knowledge/` 전체에 대한 full-context 질의 CLI
-- `templates/MEMORY.md.tmpl` / `STATE.md.tmpl` / `TASKS.md.tmpl` / `daily.md.tmpl` / `knowledge-index.md.tmpl`
-- `tests/` — pytest 36 test suite
-
-## 디자인 문서
-
-전체 설계 배경은 원본 저장소의 `docs/superpowers/specs/2026-04-15-memory-system-design.md` 참조.
+- `SKILL.md` — 스킬 정의
+- `scripts/bootstrap.py` — `install-global` + `init-project` + 레거시 마이그레이션
+- `scripts/memory_ops.py` — 파일 I/O, 크로스 플랫폼 락, `append_buffer_turn`, `append_hook_error`, `compute_event_id`
+- `scripts/stop.py` — Stop/StopFailure/SubagentStop/PreCompact 공용 진입 (safe_main)
+- `scripts/pre_compact.py` — stop.safe_main 위임 래퍼
+- `scripts/session_start.py` — consolidation + MEMORY.md + 훅 에러 요약 주입
+- `scripts/consolidate.py` — buffer → patterns/lessons/rules 승격 (문자열 유사도)
+- `templates/` — MEMORY/STATE/TASKS 초기 템플릿
+- `tests/` — 26개 pytest
 
 ## 원자성 / 동시성 보장
 
-- 같은 프로젝트에서 **여러 Claude Code 세션을 동시에 열어도 안전**합니다.
-- `<project>/.memory/.lock` 파일을 통한 크로스 프로세스 배타 락으로 `run_consolidation`과 `write_entry`가 직렬화됩니다.
-- 타임아웃 5초, 실패 시 `TimeoutError`.
-- 프로세스가 죽어도 OS가 락을 해제 (dead-lock 없음).
+- 같은 프로젝트에서 여러 Claude Code 세션을 동시에 열어도 안전.
+- `append_buffer_turn`은 `<project>/.memory/.lock` 내부에서 수행 — concurrent Stop 이벤트 간 file race 방지.
+- 파일명에 `timestamp_ns + 8자 event_hash` 포함 → 같은 이벤트의 중복 저장(idempotency)과 동시 저장(unique)을 동시에 보장.
+- 예외 발생 시 `_hook_errors.jsonl`에 JSON line append, 훅은 exit 0으로 조용히 종료 → 메모리 실패가 Claude 작업을 막지 않음.

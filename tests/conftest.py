@@ -19,7 +19,6 @@ def tmp_memory_dir(tmp_path):
     (memory / "lessons").mkdir()
     (memory / "patterns").mkdir()
     (memory / "_buffer").mkdir()
-    (memory / "_archive").mkdir()
     return memory
 
 

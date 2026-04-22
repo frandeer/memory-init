@@ -13,10 +13,6 @@ SECTIONS = (
     "lessons",
     "patterns",
     "_buffer",
-    "_archive",
-    "daily",
-    "knowledge/concepts",
-    "knowledge/connections",
 )
 
 
@@ -56,22 +52,42 @@ def init_project(project_root: Path) -> Path:
             "last_consolidated": None,
             "references": {},
             "project_tags": [],
-            "compile_hashes": {},
         }
         meta_path.write_text(json.dumps(meta, indent=2), encoding="utf-8")
-    else:
-        # Forward-compat: add compile_hashes to pre-existing .meta.json.
-        meta = json.loads(meta_path.read_text(encoding="utf-8"))
-        if "compile_hashes" not in meta:
-            meta["compile_hashes"] = {}
-            meta_path.write_text(json.dumps(meta, indent=2), encoding="utf-8")
 
-    knowledge_index = memory / "knowledge" / "index.md"
-    if not knowledge_index.exists():
-        tmpl = (TEMPLATES_DIR / "knowledge-index.md.tmpl").read_text(encoding="utf-8")
-        knowledge_index.write_text(tmpl, encoding="utf-8")
-
+    _migrate_legacy_dirs(memory, today)
     return memory
+
+
+LEGACY_DIRS = ("daily", "_archive", "knowledge")
+
+
+def _migrate_legacy_dirs(memory: Path, today: str) -> None:
+    """Move obsolete ``daily/``, ``_archive/``, ``knowledge/`` into a dated bucket.
+
+    The minimal pipeline doesn't use these layers anymore (they required LLM
+    flush/compile). Preserve any existing content under ``_migrated-<date>/``
+    instead of deleting. No-op on fresh projects.
+    """
+    migrated_root = memory / f"_migrated-{today}"
+    for name in LEGACY_DIRS:
+        src = memory / name
+        if not src.exists():
+            continue
+        try:
+            if not any(src.rglob("*")):
+                src.rmdir()
+                continue
+        except OSError:
+            pass
+        migrated_root.mkdir(exist_ok=True)
+        dest = migrated_root / name
+        if dest.exists():
+            continue
+        try:
+            src.rename(dest)
+        except OSError:
+            pass
 
 
 HOOK_COMMAND_SESSION_START = "session_start.py"
@@ -97,13 +113,14 @@ Claude Code 기본 auto-memory(`~/.claude/projects/<slug>/memory/`)는 `.memory/
 프로젝트에서는 **쓰지 마세요** — 두 시스템 동시 운영 시 충돌/중복이 발생합니다.
 
 - 부트스트랩: `/memory-init` 스킬
-- 런타임 훅: SessionStart / Stop / StopFailure는 `~/.claude/settings.json`에 설치됨
+- 런타임 훅: SessionStart / Stop / StopFailure / SubagentStop / PreCompact는 `~/.claude/settings.json`에 설치됨
 - 스킬 루트: `~/.claude/skills/memory-init/`
-- 파일 레이아웃: `<project>/.memory/MEMORY.md`, `STATE.md`, `TASKS.md`, `rules/`, `lessons/`, `patterns/`, `_buffer/`, `daily/`, `knowledge/`
+- 파일 레이아웃: `<project>/.memory/MEMORY.md`, `STATE.md`, `TASKS.md`, `rules/`, `lessons/`, `patterns/`, `_buffer/`
 
-**두 개의 기억 레이어:**
-- **규범적 (rules/lessons/patterns)**: "앞으로 항상/절대 X" — `MEMORY.md`가 인덱스
-- **서술적 (knowledge/concepts·connections)**: "X가 뭔지, 어떻게 연결되는지" — `knowledge/index.md`가 인덱스. `ANTHROPIC_API_KEY` + `anthropic` 패키지가 있을 때만 활성화 (대화를 LLM으로 컴파일). 없으면 규범적 레이어만 동작.
+**한 개의 기억 레이어 (규범적):**
+- **rules/lessons/patterns**: "앞으로 항상/절대 X" — `MEMORY.md`가 인덱스
+- Stop/SubagentStop 훅이 `_buffer/`에 대화 턴을 적재하고, SessionStart가 반복된 패턴을 `patterns/`로 승격시킨다. LLM 호출 없음.
+- 훅 실패 시 `.memory/_hook_errors.jsonl`에 dead-letter가 남고, 다음 SessionStart에 요약이 표시된다.
 
 **메모리 쓰기 규칙:**
 - `.memory/`가 있는 프로젝트: 항상 `.memory/`에 쓴다. 기본 auto-memory 경로에 쓰지 않는다.
@@ -178,6 +195,7 @@ def install_global_hooks() -> Path:
     _ensure("SessionStart", SESSION_START_ABS, HOOK_COMMAND_SESSION_START)
     _ensure("Stop", STOP_ABS, HOOK_COMMAND_STOP)
     _ensure("StopFailure", STOP_ABS, HOOK_COMMAND_STOP)
+    _ensure("SubagentStop", STOP_ABS, HOOK_COMMAND_STOP)
     _ensure("PreCompact", PRE_COMPACT_ABS, HOOK_COMMAND_PRE_COMPACT)
 
     settings_path.write_text(json.dumps(data, indent=2), encoding="utf-8")

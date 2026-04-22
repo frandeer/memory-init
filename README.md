@@ -30,7 +30,7 @@ pip install pyyaml
 python ~/.claude/skills/memory-init/scripts/bootstrap.py install-global
 ```
 
-이게 끝. `~/.claude/settings.json`에 훅 3개 등록 + `~/.claude/CLAUDE.md`에 override 섹션 추가.
+이게 끝. `~/.claude/settings.json`에 훅 5개 등록 (SessionStart/Stop/StopFailure/SubagentStop/PreCompact) + `~/.claude/CLAUDE.md`에 override 섹션 추가.
 
 ### 새 프로젝트마다
 
@@ -107,15 +107,17 @@ SessionStart 훅
 
 [세션 진행 — Claude가 필요할 때 rules/*.md, lessons/*.md 를 on-demand 로드]
 
-매 턴 종료 (Stop / StopFailure 훅)
+매 턴 종료 (Stop / StopFailure / SubagentStop / PreCompact 훅)
   ↓
-  └─ 이번 턴 에피소드를 _buffer/session-<id>-turn-<n>.md 에 atomic write
-     (세션이 강제 종료돼도 버퍼는 디스크에 살아남음)
+  └─ safe_main() wrapper → 이번 턴 에피소드를 _buffer/<ts_ns>-<sid>-<hook>-<hash>.md 에 atomic write
+     (세션이 강제 종료돼도 버퍼는 디스크에 살아남음, 예외는 _hook_errors.jsonl 에 dead-letter)
 ```
 
 **핵심 보장:**
 - 하드킬/크래시 내성: Stop 훅이 턴마다 append → 최악의 경우 in-flight 턴 1개만 유실
-- 동시 세션 안전: `.memory/.lock` 크로스 프로세스 배타 락 (Windows `msvcrt.locking` / Unix `fcntl.flock`)
+- 동시 세션 안전: `append_buffer_turn`이 `.memory/.lock` 크로스 프로세스 배타 락 내부에서 실행. 파일명은 `timestamp_ns + 8자 event_hash`로 race-proof
+- 훅 실패 가시화: 모든 훅은 `safe_main()`으로 감싸져 예외가 `_hook_errors.jsonl`에 JSON line으로 기록되고, 다음 SessionStart에 요약 주입
+- Subagent hybrid: SubagentStop → `kind: subagent_turn` 별도 파일 + 부모 Stop이 `child_refs`로 참조 + 본문에 100자 요약 임베드
 - 토큰 예산: 매 세션 자동 로드는 인덱스 + (선택적) STATE 한 줄, 합쳐서 ≤150줄 / 25KB 하드 상한
 
 ## 파일 레이아웃
@@ -134,7 +136,7 @@ SessionStart 훅
     ├── patterns/*.md     # 자동 승격된 일반화
     │
     ├── _buffer/          # 세션 턴별 에피소드 (consolidation 대상)
-    └── _archive/         # prune된 메모리 (삭제 아닌 보관)
+    └── _hook_errors.jsonl  # 훅 예외 dead-letter (최초엔 없음)
 ```
 
 ## 메모리 타입 설명
@@ -147,26 +149,17 @@ SessionStart 훅
 
 수동 저장은 rule + lesson만. pattern은 consolidation이 2+ 독립 세션에서 같은 테마를 보면 알아서 생성.
 
-## 지식 아티클 레이어 (optional)
+## 레거시 레이어 제거됨
 
-위 rule/lesson/pattern이 **"앞으로 항상/절대 X"** 라는 규범적 기억이라면, 이 레이어는 **"X가 뭔지, 어떻게 연결되는지"** 라는 서술적 지식. 대화 자체를 LLM으로 컴파일해 `knowledge/concepts/`, `knowledge/connections/` 아티클을 만든다 (Karpathy의 LLM Wiki 모델).
+이전 버전은 LLM 의존 `daily/`, `knowledge/concepts/`, `knowledge/connections/` 레이어를 포함했지만,
+불안정성(훅 예외 무방비, 500자 컷, tool_use 스킵 등)을 고치기 위해 **Minimal 파이프라인**으로 슬림화됐습니다.
 
-```
-_buffer/ ──(flush.py, LLM)──▶ daily/YYYY-MM-DD.md ──(compile.py, SHA256 incremental)──▶ knowledge/concepts/*.md
-                                                                                     └─▶ knowledge/connections/*.md
-```
+- `ANTHROPIC_API_KEY` 불필요
+- `flush.py` / `compile.py` / `query.py` / `llm.py` 제거됨
+- 기존 `.memory/daily/`, `_archive/`, `knowledge/` 폴더는 `init-project` 재실행 시 자동으로
+  `.memory/_migrated-YYYYMMDD/`로 이동 — 데이터 손실 없음
 
-**활성화 조건:** `pip install anthropic` + `ANTHROPIC_API_KEY` 환경변수. 둘 중 하나라도 없으면 규범적 레이어만 계속 동작하고 이 레이어는 no-op.
-
-**조회:**
-
-```bash
-python ~/.claude/skills/memory-init/scripts/query.py <project>/.memory "이 프로젝트에서 auth cookie는 어떻게 다루지?"
-```
-
-RAG 없이 `knowledge/index.md` + 모든 아티클을 그대로 LLM에 넘기는 full-context 방식 (<500 아티클 규모에선 벡터 DB보다 더 정확).
-
-**추가 안전장치:** `CLAUDE_INVOKED_BY=memory-compiler` 환경변수로 LLM 호출이 또 SessionStart 훅을 트리거하는 무한 재귀를 차단. PreCompact 훅이 auto-compaction 직전 턴 스냅샷을 `_buffer/`에 남겨 context 손실도 방지.
+PreCompact 훅은 유지되며, `stop.safe_main`에 위임해 auto-compaction 직전 턴 스냅샷을 `_buffer/`에 남깁니다.
 
 ## 동시 세션
 
@@ -220,6 +213,15 @@ from consolidate import run_consolidation
 print(run_consolidation(Path('<your-project>/.memory')))
 "
 ```
+
+### 턴이 저장됐는지 확인 / 훅 에러 조회
+
+```bash
+ls <your-project>/.memory/_buffer/       # 최근 이벤트 파일 목록
+cat <your-project>/.memory/_hook_errors.jsonl  # 최근 실패들 (있을 때만)
+```
+
+버퍼가 0건이라면 Stop 훅이 발동 안 하는 것 — bootstrap을 `install-global`로 재실행해 훅 등록 확인.
 
 ### 메모리 시스템 일시 비활성화
 
