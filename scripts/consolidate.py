@@ -96,6 +96,15 @@ def detect_promotions(buffer_episodes: list[dict[str, Any]]) -> list[dict[str, A
     return promotions
 
 
+BUFFER_GLOBS = (
+    "session-*.md",
+    "*-Stop-*.md",
+    "*-StopFailure-*.md",
+    "*-SubagentStop-*.md",
+    "*-PreCompact-*.md",
+)
+
+
 def _read_buffer_episodes(
     memory_dir: Path, sentinel_name: str = ".consolidated"
 ) -> list[dict[str, Any]]:
@@ -111,16 +120,7 @@ def _read_buffer_episodes(
     sentinel = buffer_dir / sentinel_name
     cutoff = sentinel.stat().st_mtime if sentinel.exists() else 0.0
 
-    # Accept both legacy ``session-<sid>-turn-NNNN.md`` and v2
-    # ``<ts_ns>-<sid>-<hook>-<hash>.md`` filenames. Hook name appears
-    # untruncated in v2 filenames, so the pattern must match each event kind.
-    buffer_globs = (
-        "session-*.md",
-        "*-Stop-*.md",
-        "*-StopFailure-*.md",
-        "*-SubagentStop-*.md",
-        "*-PreCompact-*.md",
-    )
+    buffer_globs = BUFFER_GLOBS
     candidates = {p for pattern in buffer_globs for p in buffer_dir.glob(pattern)}
 
     episodes: list[dict[str, Any]] = []
@@ -142,13 +142,18 @@ def _read_buffer_episodes(
 def _cleanup_old_buffer_files(
     buffer_dir: Path, sentinel: Path, max_age_days: int = 30
 ) -> int:
-    """Remove already-processed buffer files older than max_age_days."""
+    """Remove already-processed buffer files older than max_age_days.
+
+    Only targets files matching BUFFER_GLOBS — the same patterns
+    _read_buffer_episodes uses — so stray or unrecognized files are preserved.
+    """
     if not sentinel.exists():
         return 0
     cutoff_mtime = sentinel.stat().st_mtime
     age_cutoff = datetime.datetime.now().timestamp() - max_age_days * 86400
+    candidates = {p for pattern in BUFFER_GLOBS for p in buffer_dir.glob(pattern)}
     removed = 0
-    for path in list(buffer_dir.glob("*.md")):
+    for path in candidates:
         if path.name.startswith("."):
             continue
         try:
@@ -159,6 +164,23 @@ def _cleanup_old_buffer_files(
             path.unlink(missing_ok=True)
             removed += 1
     return removed
+
+
+def _update_promotion_candidates(memory_md: Path, notes: list[str]) -> None:
+    """Replace only the Promotion Candidates section in MEMORY.md, preserving all other content."""
+    try:
+        text = memory_md.read_text(encoding="utf-8")
+    except OSError:
+        return
+    marker = "## Promotion Candidates"
+    idx = text.find(marker)
+    if idx == -1:
+        text = text.rstrip() + "\n\n" + marker + "\n" + "\n".join(notes) + "\n"
+    else:
+        before = text[:idx]
+        new_section = marker + "\n" + "\n".join(notes) + "\n"
+        text = before + new_section
+    atomic_write(memory_md, text)
 
 
 def _update_meta_json(memory_dir: Path) -> None:
@@ -224,10 +246,7 @@ def run_consolidation(memory_dir: Path) -> dict[str, int]:
                     )
 
             if duplicate_notes:
-                rendered = render_memory_index(
-                    current, promotion_candidates=duplicate_notes
-                )
-                atomic_write(memory_dir / "MEMORY.md", rendered)
+                _update_promotion_candidates(memory_dir / "MEMORY.md", duplicate_notes)
 
         sentinel = buffer_dir / ".consolidated"
         _cleanup_old_buffer_files(buffer_dir, sentinel)

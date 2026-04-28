@@ -200,7 +200,7 @@ def append_buffer_turn(memory_dir: Path, episode: dict[str, Any]) -> Path:
     filename = f"{ts_ns}-{sid_short}-{hook_clean}-{hash_short}.md"
     target = buffer_dir / filename
 
-    with acquire_lock(memory_dir / ".lock", timeout=10):
+    with acquire_lock(memory_dir / ".lock", timeout=30):
         # Idempotency: same event_id already on disk? Bail out.
         if event_id:
             for existing in buffer_dir.glob(f"*-{hash_short}.md"):
@@ -308,7 +308,7 @@ def mark_consumed(memory_dir: Path, paths: list[Path], parent_event_id: str) -> 
     if not paths:
         return
     memory_dir = Path(memory_dir)
-    with acquire_lock(memory_dir / ".lock", timeout=10):
+    with acquire_lock(memory_dir / ".lock", timeout=30):
         for path in paths:
             parsed = parse_buffer_file(path)
             if parsed is None:
