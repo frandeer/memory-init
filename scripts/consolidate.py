@@ -16,6 +16,7 @@ import yaml
 from memory_ops import (
     _write_entry_locked,
     acquire_lock,
+    atomic_write,
     parse_buffer_file,
     parse_memory_index,
     render_memory_index,
@@ -168,7 +169,7 @@ def _update_meta_json(memory_dir: Path) -> None:
     try:
         data = json.loads(meta_path.read_text(encoding="utf-8"))
         data["last_consolidated"] = datetime.datetime.now().isoformat(timespec="seconds")
-        meta_path.write_text(json.dumps(data, indent=2), encoding="utf-8")
+        atomic_write(meta_path, json.dumps(data, indent=2))
     except (json.JSONDecodeError, OSError):
         pass
 
@@ -223,11 +224,9 @@ def run_consolidation(memory_dir: Path) -> dict[str, int]:
                     )
 
             if duplicate_notes:
-                sections = parse_memory_index(memory_dir / "MEMORY.md")
                 rendered = render_memory_index(
-                    sections, promotion_candidates=duplicate_notes
+                    current, promotion_candidates=duplicate_notes
                 )
-                from memory_ops import atomic_write
                 atomic_write(memory_dir / "MEMORY.md", rendered)
 
         sentinel = buffer_dir / ".consolidated"

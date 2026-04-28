@@ -185,11 +185,11 @@ def _summarize_turn(rows: list[dict[str, Any]]) -> dict[str, Any]:
 
 
 def _theme_from(user_text: str) -> str:
-    for token in (user_text or "").split():
+    tokens = (user_text or "").split()
+    for token in tokens:
         if token.startswith("#") and len(token) > 1:
             return token[1:].strip(".,;:!?")
-    # Fallback: extract theme from file paths or directory names in user text
-    for token in (user_text or "").split():
+    for token in tokens:
         if "/" in token and len(token) > 3:
             parts = [p for p in token.strip("`'\"").split("/") if p and p != "."]
             if parts:

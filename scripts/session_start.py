@@ -14,6 +14,7 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).parent))
 
 from consolidate import run_consolidation  # noqa: E402
+from memory_ops import atomic_write  # noqa: E402
 
 
 def _recent_hook_errors(memory_dir: Path, limit: int = 3) -> list[str]:
@@ -48,7 +49,7 @@ def _rotate_hook_errors(memory_dir: Path, max_lines: int = 100, keep: int = 20) 
     except OSError:
         return
     if len(all_lines) > max_lines:
-        log.write_text("\n".join(all_lines[-keep:]) + "\n", encoding="utf-8")
+        atomic_write(log, "\n".join(all_lines[-keep:]) + "\n")
 
 
 def _read_project_tags(memory_dir: Path) -> list[str]:
