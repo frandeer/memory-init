@@ -38,6 +38,31 @@ def _recent_hook_errors(memory_dir: Path, limit: int = 3) -> list[str]:
     return out
 
 
+def _rotate_hook_errors(memory_dir: Path, max_lines: int = 100, keep: int = 20) -> None:
+    """Trim _hook_errors.jsonl to last ``keep`` lines if it exceeds ``max_lines``."""
+    log = memory_dir / "_hook_errors.jsonl"
+    if not log.exists():
+        return
+    try:
+        all_lines = log.read_text(encoding="utf-8").strip().splitlines()
+    except OSError:
+        return
+    if len(all_lines) > max_lines:
+        log.write_text("\n".join(all_lines[-keep:]) + "\n", encoding="utf-8")
+
+
+def _read_project_tags(memory_dir: Path) -> list[str]:
+    """Read project_tags from .meta.json."""
+    meta_path = memory_dir / ".meta.json"
+    if not meta_path.exists():
+        return []
+    try:
+        data = json.loads(meta_path.read_text(encoding="utf-8"))
+        return data.get("project_tags", [])
+    except (json.JSONDecodeError, OSError):
+        return []
+
+
 def main() -> int:
     try:
         payload = json.load(sys.stdin)
@@ -50,6 +75,7 @@ def main() -> int:
         return 0
 
     consolidation = run_consolidation(memory_dir)
+    _rotate_hook_errors(memory_dir)
 
     index_path = memory_dir / "MEMORY.md"
     if not index_path.exists():
@@ -69,8 +95,15 @@ def main() -> int:
     output_parts = [
         f"# Memory index (from {memory_dir})",
         "",
-        index_text,
     ]
+
+    project_tags = _read_project_tags(memory_dir)
+    if project_tags:
+        output_parts.append(f"> Tech stack: {', '.join(project_tags)}")
+        output_parts.append("")
+
+    output_parts.append(index_text)
+
     if state_text:
         output_parts.extend(["", "# Current STATE", "", state_text])
 

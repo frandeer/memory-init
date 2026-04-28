@@ -121,6 +121,12 @@ Claude Code 기본 auto-memory(`~/.claude/projects/<slug>/memory/`)는 `.memory/
 - **rules/lessons/patterns**: "앞으로 항상/절대 X" — `MEMORY.md`가 인덱스
 - Stop/SubagentStop 훅이 `_buffer/`에 대화 턴을 적재하고, SessionStart가 반복된 패턴을 `patterns/`로 승격시킨다. LLM 호출 없음.
 - 훅 실패 시 `.memory/_hook_errors.jsonl`에 dead-letter가 남고, 다음 SessionStart에 요약이 표시된다.
+- 패턴 자동 승격을 돕기 위해, 반복 작업 시 `#태그`를 user 메시지에 포함하면 theme 기반 승격이 활성화된다.
+
+**메모리 활용 지침:**
+- 작업 시작 시 MEMORY.md 인덱스를 확인하고, 현재 작업과 관련된 rules/lessons 파일을 Read하라.
+- 사용자가 규칙/교훈을 언급하면 `.memory/rules/` 또는 `.memory/lessons/`에 파일로 저장하라.
+- 작업 완료/중단 시 `STATE.md`를 갱신하라. 장기 태스크 변경 시 `TASKS.md`를 갱신하라.
 
 **메모리 쓰기 규칙:**
 - `.memory/`가 있는 프로젝트: 항상 `.memory/`에 쓴다. 기본 auto-memory 경로에 쓰지 않는다.

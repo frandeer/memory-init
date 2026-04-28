@@ -75,7 +75,7 @@ def test_run_consolidation_empty_buffer_noop(tmp_memory_dir):
     """If buffer is empty, no changes are made."""
     result = run_consolidation(tmp_memory_dir)
     assert result["promoted"] == 0
-    assert result["merged"] == 0
+    assert result["duplicates_found"] == 0
 
 
 def test_run_consolidation_with_promotion(tmp_memory_dir):

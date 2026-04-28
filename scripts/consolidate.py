@@ -5,6 +5,7 @@ Pure logic. File access happens through memory_ops.
 from __future__ import annotations
 
 import datetime
+import json
 import re
 from difflib import SequenceMatcher
 from pathlib import Path
@@ -17,6 +18,7 @@ from memory_ops import (
     acquire_lock,
     parse_buffer_file,
     parse_memory_index,
+    render_memory_index,
 )
 
 
@@ -136,6 +138,41 @@ def _read_buffer_episodes(
     return episodes
 
 
+def _cleanup_old_buffer_files(
+    buffer_dir: Path, sentinel: Path, max_age_days: int = 30
+) -> int:
+    """Remove already-processed buffer files older than max_age_days."""
+    if not sentinel.exists():
+        return 0
+    cutoff_mtime = sentinel.stat().st_mtime
+    age_cutoff = datetime.datetime.now().timestamp() - max_age_days * 86400
+    removed = 0
+    for path in list(buffer_dir.glob("*.md")):
+        if path.name.startswith("."):
+            continue
+        try:
+            st = path.stat()
+        except OSError:
+            continue
+        if st.st_mtime <= cutoff_mtime and st.st_mtime < age_cutoff:
+            path.unlink(missing_ok=True)
+            removed += 1
+    return removed
+
+
+def _update_meta_json(memory_dir: Path) -> None:
+    """Update .meta.json with current consolidation timestamp."""
+    meta_path = memory_dir / ".meta.json"
+    if not meta_path.exists():
+        return
+    try:
+        data = json.loads(meta_path.read_text(encoding="utf-8"))
+        data["last_consolidated"] = datetime.datetime.now().isoformat(timespec="seconds")
+        meta_path.write_text(json.dumps(data, indent=2), encoding="utf-8")
+    except (json.JSONDecodeError, OSError):
+        pass
+
+
 def run_consolidation(memory_dir: Path) -> dict[str, int]:
     """Execute full consolidation pass on a .memory/ directory.
 
@@ -153,7 +190,8 @@ def run_consolidation(memory_dir: Path) -> dict[str, int]:
     with acquire_lock(memory_dir / ".lock"):
         episodes = _read_buffer_episodes(memory_dir)
         promoted = 0
-        merged = 0
+        duplicates_found = 0
+        duplicate_notes: list[str] = []
 
         if episodes:
             promotions = detect_promotions(episodes)
@@ -178,9 +216,27 @@ def run_consolidation(memory_dir: Path) -> dict[str, int]:
             current = parse_memory_index(memory_dir / "MEMORY.md")
             for section_name, section_entries in current.items():
                 dupes = find_duplicates(section_entries, threshold=0.85)
-                merged += len(dupes)
+                duplicates_found += len(dupes)
+                for id_a, id_b in dupes:
+                    duplicate_notes.append(
+                        f"- {section_name}: `{id_a}` ↔ `{id_b}` (유사도 높음, 수동 정리 권장)"
+                    )
+
+            if duplicate_notes:
+                sections = parse_memory_index(memory_dir / "MEMORY.md")
+                rendered = render_memory_index(
+                    sections, promotion_candidates=duplicate_notes
+                )
+                from memory_ops import atomic_write
+                atomic_write(memory_dir / "MEMORY.md", rendered)
 
         sentinel = buffer_dir / ".consolidated"
+        _cleanup_old_buffer_files(buffer_dir, sentinel)
         sentinel.touch()
+        _update_meta_json(memory_dir)
 
-        return {"promoted": promoted, "merged": merged, "episodes_seen": len(episodes)}
+        return {
+            "promoted": promoted,
+            "duplicates_found": duplicates_found,
+            "episodes_seen": len(episodes),
+        }

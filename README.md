@@ -235,8 +235,7 @@ cat <your-project>/.memory/_hook_errors.jsonl  # 최근 실패들 (있을 때만
 
 - `INSTALL.md` — 다른 PC 이식 절차
 - `SKILL.md` — 스킬 정의 (Claude Code가 읽음)
-- 원본 설계 문서: `D:/lab/document/docs/superpowers/specs/2026-04-15-memory-system-design.md`
-- 구현 계획: `D:/lab/document/docs/superpowers/plans/2026-04-15-memory-system.md`
+- 원본 설계 문서 및 구현 계획은 리포에 포함되어 있지 않습니다.
 
 ## 한계와 Post-MVP 항목
 

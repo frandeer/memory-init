@@ -188,6 +188,14 @@ def _theme_from(user_text: str) -> str:
     for token in (user_text or "").split():
         if token.startswith("#") and len(token) > 1:
             return token[1:].strip(".,;:!?")
+    # Fallback: extract theme from file paths or directory names in user text
+    for token in (user_text or "").split():
+        if "/" in token and len(token) > 3:
+            parts = [p for p in token.strip("`'\"").split("/") if p and p != "."]
+            if parts:
+                candidate = parts[-1].split(".")[0].lower().strip()
+                if len(candidate) >= 2 and candidate.isidentifier():
+                    return candidate
     return ""
 
 

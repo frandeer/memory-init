@@ -44,7 +44,7 @@ cd ~/.claude/skills/memory-init
 python -m pytest tests/ -v
 ```
 
-**26 passed**가 나와야 정상.
+모든 테스트가 passed로 나와야 정상.
 
 ### 5. 프로젝트 초기화
 
@@ -113,7 +113,7 @@ python scripts/bootstrap.py install-global    # 훅/스니펫 최신화
 - `scripts/session_start.py` — consolidation + MEMORY.md + 훅 에러 요약 주입
 - `scripts/consolidate.py` — buffer → patterns/lessons/rules 승격 (문자열 유사도)
 - `templates/` — MEMORY/STATE/TASKS 초기 템플릿
-- `tests/` — 26개 pytest
+- `tests/` — pytest 스위트
 
 ## 원자성 / 동시성 보장
 
