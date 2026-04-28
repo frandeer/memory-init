@@ -120,8 +120,7 @@ def _read_buffer_episodes(
     sentinel = buffer_dir / sentinel_name
     cutoff = sentinel.stat().st_mtime if sentinel.exists() else 0.0
 
-    buffer_globs = BUFFER_GLOBS
-    candidates = {p for pattern in buffer_globs for p in buffer_dir.glob(pattern)}
+    candidates = {p for pattern in BUFFER_GLOBS for p in buffer_dir.glob(pattern)}
 
     episodes: list[dict[str, Any]] = []
     for path in sorted(candidates):
@@ -174,12 +173,14 @@ def _update_promotion_candidates(memory_md: Path, notes: list[str]) -> None:
         return
     marker = "## Promotion Candidates"
     idx = text.find(marker)
+    new_section = marker + "\n" + "\n".join(notes) + "\n"
     if idx == -1:
-        text = text.rstrip() + "\n\n" + marker + "\n" + "\n".join(notes) + "\n"
+        text = text.rstrip() + "\n\n" + new_section
     else:
-        before = text[:idx]
-        new_section = marker + "\n" + "\n".join(notes) + "\n"
-        text = before + new_section
+        end = text.find("\n## ", idx + len(marker))
+        if end == -1:
+            end = len(text)
+        text = text[:idx] + new_section + text[end:]
     atomic_write(memory_md, text)
 
 
